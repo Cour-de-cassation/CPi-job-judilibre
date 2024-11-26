@@ -1,0 +1,128 @@
+{{- if .Values.restoreJob.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: elasticsearch-restore-job
+  labels:
+    app: elasticsearch-restore
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: restore-job
+          image: "{{ .Values.restoreJob.image.repository }}:{{ .Values.restoreJob.image.tag }}"
+          command:
+            - sh
+            - -c
+            - |
+              # Vérification que le cluster est prêt
+              until response=$(curl -s {{ .Values.restoreJob.elasticsearch.host }}/_cluster/health?pretty) && echo "$response" | grep '"status" : "green"'; do
+                echo "Attente du cluster Elasticsearch en état 'green'..."
+                sleep 10
+              done
+
+              echo "Cluster Elasticsearch prêt. Début de la restauration du snapshot..."
+
+              # Configuration du keystore pour les accès S3
+              KEYSTORE_PATH="/opt/bitnami/elasticsearch/config/elasticsearch.keystore"
+
+              if [ ! -f "$KEYSTORE_PATH" ]; then
+                  echo "Création du keystore"
+                  /opt/bitnami/elasticsearch/bin/elasticsearch-keystore create
+              fi
+
+              # Ajout des clés S3 au keystore si elles n'existent pas
+              if ! /opt/bitnami/elasticsearch/bin/elasticsearch-keystore list | grep -q "s3.client.default.access_key"; then
+                  echo "$S3_ACCESS_KEY_ID" | /opt/bitnami/elasticsearch/bin/elasticsearch-keystore add -x s3.client.default.access_key
+                  echo "$S3_SECRET_ACCESS_KEY" | /opt/bitnami/elasticsearch/bin/elasticsearch-keystore add -x s3.client.default.secret_key
+              else
+                  echo "Les clés S3 existent déjà dans le keystore."
+              fi
+
+              # Récupérer tous les snapshots
+              echo "Récuperation des snpashots..."
+              snapshots=$(curl -s -X GET "{{ .Values.restoreJob.elasticsearch.host }}/_snapshot/s3_repository/_all?pretty")
+
+              # Afficher les snapshots
+              echo "Snapshots disponibles :"
+              echo "$snapshots"
+
+              # Récupérer le dernier snapshot
+              last_snapshot=$(echo "$snapshots" | grep -oP '"snapshot" : "\K[^"]+' | sort | tail -n 1)
+              
+              echo "Dernier snapshot trouvé : $last_snapshot"
+
+              if [ -z "$last_snapshot" ]; then
+                echo "Aucun snapshot trouvé dans le repository. Abandon..."
+                exit 1
+              fi
+              
+              echo "Dernier snapshot trouvé : $last_snapshot"
+
+              # Lancer la restauration du snapshot
+              restore_response=$(curl -X POST "{{ .Values.restoreJob.elasticsearch.host }}/_snapshot/{{ .Values.restoreJob.snapshot.repository }}/$last_snapshot/_restore?pretty" \
+              -H 'Content-Type: application/json' \
+              -d'
+              {
+                "indices": "*",
+                "ignore_unavailable": true,
+                "include_global_state": true
+              }')
+
+               # Vérifier si la restauration a été initiée avec succès
+              if echo "$restore_response" | grep -q '"error"' ; then
+                echo "Erreur lors de la restauration : $restore_response"
+                exit 1
+              fi
+
+              echo "Restauration du snapshot en cours..."
+
+              # Boucle pour suivre la progression de la restauration via _cat/recovery
+              while true; do
+                echo "Suivi de la progression de la restauration..."
+                
+                # Récupérer la progression de restauration pour chaque shard
+                progress_response=$(curl -s "{{ .Values.restoreJob.elasticsearch.host }}/_cat/recovery?v&pretty")
+                
+                # Afficher la progression de restauration pour information
+                echo "Progression de la restauration :"
+                echo "$progress_response" | grep -E '(index|shard|stage|recovered|files|size|%|time)'
+                
+                # Vérifier si tous les shards sont en état "done"
+                # Filtrer pour ne garder que les lignes pour les shards de l'index 'judilibre' et vérifier l'état "done"
+                # Vérifier si des shards de l'index 'judilibre' existent dans la récupération
+                if echo "$progress_response" | grep -q '^judilibre'; then
+                    # Vérifier si tous les shards sont en état "done"
+                    if echo "$progress_response" | grep '^judilibre' | awk '{if ($5 != "done") exit 1}'; then
+                        echo "Tous les shards de 'judilibre' sont en état 'done'. Restauration terminée avec succès."
+                        break
+                    fi
+                else
+                    echo "Aucun shard 'judilibre' détecté dans le processus de récupération. Attente..."
+                fi
+                # Attendre avant la prochaine vérification
+                sleep 10
+              done
+
+              echo "La restauration du snapshot est terminée avec succès."
+
+          env:
+            - name: S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: aws-credentials
+                  key: AWS_ACCESS_KEY_ID
+            - name: S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aws-credentials
+                  key: AWS_SECRET_ACCESS_KEY
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              memory: "256Mi"
+              cpu: "100m"
+{{- end }}
