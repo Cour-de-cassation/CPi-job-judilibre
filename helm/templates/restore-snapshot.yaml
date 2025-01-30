@@ -1,0 +1,100 @@
+{{- if .Values.restore-snapshot.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: restore-snapshot
+  labels:
+    app: elasticsearch-restore-snapshot
+spec:
+  schedule: "0 0 31 2 *" # 31 février à minuit
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: restore-snapshot-job
+              image: "{{ .Values.restore-snapshot.image.repository }}:{{ .Values.restore-snapshot.image.tag }}"
+              command:
+                - sh
+                - -c
+                - |
+                  # Vérification que le cluster est prêt
+                  until response=$(curl -s {{ .Values.restore-snapshot.elasticsearch.host }}/_cluster/health?pretty) && echo "$response" | grep '"status" : "green"'; do
+                    echo "Attente du cluster Elasticsearch en état 'green'..."
+                    sleep 10
+                  done
+
+                  echo "Cluster Elasticsearch prêt. Début de la restauration du snapshot..."
+
+                  # Récupérer tous les snapshots
+                  echo "Récuperation des snapshots..."
+                  snapshots=$(curl -s -X GET "{{ .Values.restore-snapshot.elasticsearch.host }}/_snapshot/{{ .Values.restore-snapshot.snapshot.repository }}/_all?pretty")
+
+                  # Afficher les snapshots
+                  echo "Snapshots disponibles :"
+                  echo "$snapshots"
+
+                  # Récupérer le dernier snapshot
+                  last_snapshot=$(echo "$snapshots" | grep -oP '"snapshot" : "\K[^"]+' | sort | tail -n 1)
+                  
+                  echo "Dernier snapshot trouvé : $last_snapshot"
+
+                  if [ -z "$last_snapshot" ]; then
+                    echo "Aucun snapshot trouvé dans le repository. Abandon..."
+                    exit 1
+                  fi
+                  
+                  echo "Dernier snapshot trouvé : $last_snapshot"
+
+                  # Lancer la restauration du snapshot
+                  restore_response=$(curl -X POST "{{ .Values.restore-snapshot.elasticsearch.host }}/_snapshot/{{ .Values.restore-snapshot.snapshot.repository }}/$last_snapshot/_restore?pretty" \
+                  -H 'Content-Type: application/json' \
+                  -d'
+                  {
+                    "indices": "*",
+                    "ignore_unavailable": true,
+                    "include_global_state": true
+                  }')
+
+                   # Vérifier si la restauration a été initiée avec succès
+                  if echo "$restore_response" | grep -q '"error"' ; then
+                    echo "Erreur lors de la restauration : $restore_response"
+                    exit 1
+                  fi
+
+                  echo "Restauration du snapshot en cours..."
+                  # Boucle pour suivre la progression de la restauration via _cat/recovery
+                  while true; do
+                    echo "Suivi de la progression de la restauration..."
+                    
+                    # Récupérer la progression de restauration pour chaque shard
+                    progress_response=$(curl -s "{{ .Values.restore-snapshot.elasticsearch.host }}/_cat/recovery?v&pretty")
+                    
+                    # Afficher la progression de restauration pour information
+                    echo "Progression de la restauration :"
+                    echo "$progress_response" | grep -E '(index|shard|stage|recovered|files|size|%|time)'
+
+                    # Vérifier si des shards sont en cours de restauration
+                    if echo "$progress_response" | grep -q -E '^.+\s+[0-9]+\s+\S+\s+\S+\s+.+$'; then
+                      # Vérifier si tous les shards sont en état "done"
+                      if echo "$progress_response" | awk '{if ($5 != "done" && NR > 1) exit 1}'; then
+                        echo "Tous les shards sont en état 'done'. Restauration terminée avec succès."
+                        break
+                      fi
+                    else
+                      echo "Aucun shard en cours de restauration détecté. Attente..."
+                    fi
+
+                    # Attendre avant la prochaine vérification
+                    sleep 10
+                  done
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  memory: "256Mi"
+                  cpu: "100m"
+{{- end }}
+
