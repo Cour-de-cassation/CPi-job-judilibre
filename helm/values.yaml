@@ -18,7 +18,19 @@ restore-snapshot:
   elasticsearch:
     host: "http://judilibre-es:9200" # URL de ton cluster Elasticsearch
   snapshot:
-    repository: "minio_repository"
+    repository: "changeme" # Le nom du repository
+snapshotter:
+  enabled: false
+  image:
+    repository: docker.io/bitnami/elasticsearch
+    tag: "7.17.24-debian-12-r2"
+  elasticsearch:
+    host: "http://judilibre-es:9200" # URL de ton cluster Elasticsearch
+  repository:
+    name: "changeme" # Le nom du repository
+    bucket: "changeme" # Le nom du bucket
+    client: "changeme" # Le nom du client S3
+    endpoint: "changeme" # L'URL de l'endpoint S3
 # This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
 env:
    - name: ELASTIC_NODE

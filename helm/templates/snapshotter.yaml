@@ -1,0 +1,68 @@
+{{- if .Values.snapshotter.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: elastic-snapshotter-job
+  labels:
+    app: elastic-snapshotter
+spec:
+  schedule: "0 0 31 2 *" # 31 février à minuit
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: snapshotter-job
+              image: "{{ .Values.snapshotter.image.repository }}:{{ .Values.snapshotter.image.tag }}"
+              command:
+                - sh
+                - -c
+                - |
+                  #!/bin/bash
+                  set -e
+                  
+                  # Vérification que le cluster est prêt
+                  until response=$(curl -s {{ .Values.snapshotter.elasticsearch.host }}/_cluster/health?pretty) && echo "$response" | grep '"status" : "green"'; do
+                    echo "Attente du cluster Elasticsearch en état 'green'..."
+                    sleep 10
+                  done
+                  
+                  echo "Cluster Elasticsearch prêt. Configuration du repository MinIO..."
+
+
+                  # Vérification de l'accessibilité de l'endpoint
+                  if ! curl -s --head --fail "{{ .Values.snapshotter.repository.endpoint }}"; then
+                  echo "L'endpoint MinIO n'est pas accessible : {{ .Values.snapshotter.repository.endpoint }}"
+                  exit 1
+                  fi
+
+                  echo "L'endpoint S3 est accessible. Configuration du repository..."
+
+                  # Création d'un snapshot Elasticsearch
+                  snapshot_name="snapshot-$(date +%Y%m%d%H%M%S)"
+                  snapshot_response=$(curl -X PUT "{{ .Values.snapshotter.elasticsearch.host }}/_snapshot/{{ .Values.snapshotter.repository.name }}/$snapshot_name?wait_for_completion=true&pretty" \
+                  -H 'Content-Type: application/json' \
+                  -d'
+                  {
+                    "indices": "*",
+                    "ignore_unavailable": true,
+                    "include_global_state": true
+                  }')
+
+                  # Vérifier si le snapshot a été créé avec succès
+                  if echo "$snapshot_response" | grep -q '"error"' ; then
+                    echo "Erreur lors de la création du snapshot : $snapshot_response"
+                    exit 1
+                  fi
+
+                  echo "Snapshot response: $snapshot_response"
+                  echo "Snapshot créé avec succès : $snapshot_name"
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  memory: "256Mi"
+                  cpu: "100m"
+{{- end }}
