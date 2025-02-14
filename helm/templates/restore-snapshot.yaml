@@ -1,4 +1,4 @@
-{{- if .Values.restore-snapshot.enabled -}}
+{{- if .Values.restoreSnapshot.enabled }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:

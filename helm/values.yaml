@@ -10,7 +10,7 @@ restoreJob:
     repository: "s3_repository" # Le nom du repository
   elasticsearch:
     host: "http://judilibre-es:9200" # URL de ton cluster Elasticsearch
-restore-snapshot:
+restoreSnapshot:
   enabled: false
   image:
     repository: docker.io/bitnami/elasticsearch
