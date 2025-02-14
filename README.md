@@ -8,7 +8,7 @@ Pour activer ou désactiver un job ou cronjob, vous pouvez acceder au fichier [v
 ```yaml
 restoreJob:
     enabled: true
-restore-snapshot:
+restoreSnapshot:
     enabled: false
 snapshotter:
     enabled: false

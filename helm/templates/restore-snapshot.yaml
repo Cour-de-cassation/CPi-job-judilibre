@@ -2,9 +2,9 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: restore-snapshot
+  name: restoreSnapshot
   labels:
-    app: elasticsearch-restore-snapshot
+    app: elasticsearch-restoreSnapshot
 spec:
   schedule: "0 0 31 2 *" # 31 février à minuit
   jobTemplate:
@@ -13,14 +13,14 @@ spec:
         spec:
           restartPolicy: Never
           containers:
-            - name: restore-snapshot-job
-              image: "{{ .Values.restore-snapshot.image.repository }}:{{ .Values.restore-snapshot.image.tag }}"
+            - name: restoreSnapshot-job
+              image: "{{ .Values.restoreSnapshot.image.repository }}:{{ .Values.restoreSnapshot.image.tag }}"
               command:
                 - sh
                 - -c
                 - |
                   # Vérification que le cluster est prêt
-                  until response=$(curl -s {{ .Values.restore-snapshot.elasticsearch.host }}/_cluster/health?pretty) && echo "$response" | grep '"status" : "green"'; do
+                  until response=$(curl -s {{ .Values.restoreSnapshot.elasticsearch.host }}/_cluster/health?pretty) && echo "$response" | grep '"status" : "green"'; do
                     echo "Attente du cluster Elasticsearch en état 'green'..."
                     sleep 10
                   done
@@ -29,7 +29,7 @@ spec:
 
                   # Récupérer tous les snapshots
                   echo "Récuperation des snapshots..."
-                  snapshots=$(curl -s -X GET "{{ .Values.restore-snapshot.elasticsearch.host }}/_snapshot/{{ .Values.restore-snapshot.snapshot.repository }}/_all?pretty")
+                  snapshots=$(curl -s -X GET "{{ .Values.restoreSnapshot.elasticsearch.host }}/_snapshot/{{ .Values.restoreSnapshot.snapshot.repository }}/_all?pretty")
 
                   # Afficher les snapshots
                   echo "Snapshots disponibles :"
@@ -48,7 +48,7 @@ spec:
                   echo "Dernier snapshot trouvé : $last_snapshot"
 
                   # Lancer la restauration du snapshot
-                  restore_response=$(curl -X POST "{{ .Values.restore-snapshot.elasticsearch.host }}/_snapshot/{{ .Values.restore-snapshot.snapshot.repository }}/$last_snapshot/_restore?pretty" \
+                  restore_response=$(curl -X POST "{{ .Values.restoreSnapshot.elasticsearch.host }}/_snapshot/{{ .Values.restoreSnapshot.snapshot.repository }}/$last_snapshot/_restore?pretty" \
                   -H 'Content-Type: application/json' \
                   -d'
                   {
@@ -69,7 +69,7 @@ spec:
                     echo "Suivi de la progression de la restauration..."
                     
                     # Récupérer la progression de restauration pour chaque shard
-                    progress_response=$(curl -s "{{ .Values.restore-snapshot.elasticsearch.host }}/_cat/recovery?v&pretty")
+                    progress_response=$(curl -s "{{ .Values.restoreSnapshot.elasticsearch.host }}/_cat/recovery?v&pretty")
                     
                     # Afficher la progression de restauration pour information
                     echo "Progression de la restauration :"
